@@ -389,6 +389,7 @@ bool KinovaPositionSSMPFLController::updateSafetyRows()
     }
     catch(const std::exception &) { holdTarget("invalid pointwise row at " + label); return false; }
   }
+  safetyConstraint_->commit();
   fallback_ = false;
   fallbackReason_.clear();
   speedPlot_.valid = true;

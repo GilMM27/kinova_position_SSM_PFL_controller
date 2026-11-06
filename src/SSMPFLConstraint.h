@@ -60,8 +60,8 @@ struct SSMPFLConstraint final
     A_.row(row) = rowScale_[row] * accelerationRow;
     upper_[row] = rowScale_[row] * bound;
     if(slack_) slackA_(row, row) = -rowScale_[row];
-    sync();
   }
+  void commit() { sync(); }
   double residual(int row, const Eigen::VectorXd & acceleration) const
   { return rawA_.row(row).dot(acceleration) - rawUpper_[row]; }
   double upperResidual(int row, const Eigen::VectorXd & acceleration) const
