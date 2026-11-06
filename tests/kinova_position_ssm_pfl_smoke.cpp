@@ -49,7 +49,7 @@ int main(int argc, char ** argv)
   if((task->position() - controller.robot().frame("tool_frame").position().translation()).norm() > 1e-3)
     throw std::runtime_error("missing distance sample did not cancel target motion");
 
-  mc_mujoco::SmplhDistanceSnapshot snapshot;
+  human_robot_distance::Snapshot snapshot;
   snapshot.ready = true;
   snapshot.sample_simulation_time = 0.001;
   snapshot.sequence = 1;
@@ -61,7 +61,7 @@ int main(int argc, char ** argv)
   for(const char * region : regions)
     for(int joint = 1; joint <= 7; ++joint)
     {
-      mc_mujoco::SmplhRegionDistance sample;
+      human_robot_distance::RegionDistance sample;
       sample.region = region;
       sample.link = "joint_" + std::to_string(joint);
       sample.distance = 10.0;
@@ -74,7 +74,7 @@ int main(int argc, char ** argv)
       sample.human_velocity_valid = true;
       snapshot.regions.push_back(sample);
     }
-  controller.datastore().make<mc_mujoco::SmplhDistanceSnapshot>("SMPLH::DistanceSnapshot", snapshot);
+  controller.datastore().make<human_robot_distance::Snapshot>(human_robot_distance::datastoreKey, snapshot);
   const Eigen::Vector3d target = task->position() + Eigen::Vector3d(0.02, 0.0, 0.0);
   task->position(target);
   if(!controller.run()) throw std::runtime_error("controller failed with valid human velocity");
@@ -82,14 +82,14 @@ int main(int argc, char ** argv)
     throw std::runtime_error("valid sample unexpectedly cancelled GUI target");
 
   snapshot.sample_simulation_time = -1.0;
-  controller.datastore().assign("SMPLH::DistanceSnapshot", snapshot);
+  controller.datastore().assign(human_robot_distance::datastoreKey, snapshot);
   if(!controller.run()) throw std::runtime_error("controller failed while holding on stale sample");
   if((task->position() - target).norm() < 1e-5)
     throw std::runtime_error("stale sample did not cancel target motion");
 
   snapshot.sample_simulation_time = 0.003;
   snapshot.regions.front().human_velocity_valid = false;
-  controller.datastore().assign("SMPLH::DistanceSnapshot", snapshot);
+  controller.datastore().assign(human_robot_distance::datastoreKey, snapshot);
   task->position(target);
   if(!controller.run()) throw std::runtime_error("controller failed while holding on invalid human velocity");
   if((task->position() - target).norm() < 1e-5)
@@ -110,7 +110,7 @@ int main(int argc, char ** argv)
   const Eigen::Vector3d heldWitness = heldController.robot().bodyPosW("bracelet_link").translation();
   for(auto & sample : snapshot.regions)
     sample.robot_point = {{heldWitness.x(), heldWitness.y(), heldWitness.z()}};
-  heldController.datastore().make<mc_mujoco::SmplhDistanceSnapshot>("SMPLH::DistanceSnapshot", snapshot);
+  heldController.datastore().make<human_robot_distance::Snapshot>(human_robot_distance::datastoreKey, snapshot);
   auto * heldTask = dynamic_cast<mc_tasks::PositionTask *>(heldController.solver().tasks().front());
   if(!heldTask || std::abs(heldTask->weight() - 7.5) > 1e-12)
     throw std::runtime_error("configured position task weight was not applied");
@@ -121,4 +121,15 @@ int main(int argc, char ** argv)
   if(!heldController.run()) throw std::runtime_error("held-playback controller failed");
   if((heldTask->position() - heldTarget).norm() > 1e-10)
     throw std::runtime_error("held playback with valid zero velocity was rejected");
+
+  KinovaPositionSSMPFLController wrongTypeController(module, 0.001, config);
+  wrongTypeController.reset({wrongTypeController.robot().q()});
+  wrongTypeController.datastore().make<int>(human_robot_distance::datastoreKey, 1);
+  auto * wrongTypeTask = dynamic_cast<mc_tasks::PositionTask *>(wrongTypeController.solver().tasks().front());
+  if(!wrongTypeTask) throw std::runtime_error("position task is missing");
+  const Eigen::Vector3d wrongTypeTarget = wrongTypeTask->position() + Eigen::Vector3d(0.02, 0.0, 0.0);
+  wrongTypeTask->position(wrongTypeTarget);
+  if(!wrongTypeController.run()) throw std::runtime_error("controller failed on an incompatible snapshot type");
+  if((wrongTypeTask->position() - wrongTypeTarget).norm() < 1e-5)
+    throw std::runtime_error("incompatible snapshot type did not cancel target motion");
 }

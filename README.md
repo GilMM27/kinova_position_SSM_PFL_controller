@@ -1,21 +1,26 @@
 # Kinova position SSM+PFL controller
 
-`KinovaPositionSSMPFLController` drives the Kinova Gen3 tool to a position target set in `mc_rtc_gui`. It adds SSM+PFL speed rows to the TVM QP and holds the target when human distance samples are missing or stale. The controller needs `mc_rtc`, the Kinova robot module, and the SMPL-H distance snapshot header installed by the superbuild's `mc_mujoco` playback bridge.
+`KinovaPositionSSMPFLController` drives the Kinova Gen3 tool to a position target set in `mc_rtc_gui`. It adds SSM+PFL speed rows to the TVM QP and holds the target when human distance samples are missing or stale. The controller builds with `mc_rtc` and the header-only [`human_robot_distance_api`](https://github.com/GilMM27/human_robot_distance_api) package. At runtime it needs the Kinova robot module and a publisher of the `HumanRobotDistance::Snapshot` datastore entry using the shared API header.
 
 ## Source layout
 
-`src/KinovaPositionSSMPFLController.cpp` implements the controller in a shared library. `src/api.h` exports its class symbols, and `src/lib.cpp` registers the loadable mc_rtc controller. `src/CMakeLists.txt` builds and installs both targets.
+`src/KinovaPositionSSMPFLController.cpp` implements the controller in a shared library. `src/api.h` exports its class symbols, and `src/lib.cpp` registers the loadable mc_rtc controller. `src/CMakeLists.txt` builds and installs both targets. The snapshot type comes from `human_robot_distance_api`; producers and consumers use the same installed header and datastore key.
 
 ## Build with the superbuild
 
-The superbuild registers this repository in `extensions/zz_kinova_position_ssm_pfl_controller.cmake`. It clones `GilMM27/kinova_position_SSM_PFL_controller` by default. To build an existing checkout, configure the superbuild with:
+The superbuild registers this repository in `extensions/kinova_position_SSM_PFL_controller.cmake` by adding:
 
-```sh
-cmake -S safe-rl-qp-mc-rtc-superbuild -B /path/to/superbuild-build \
-  -DWITH_SMPLH_PLAYBACK=ON \
-  -DKINOVA_POSITION_SSM_PFL_SOURCE_DIR=/home/gilberto/repos/kinova_position_SSM_PFL_controller
-cmake --build /path/to/superbuild-build --target kinova_position_SSM_PFL_controller
 ```
+AddProject(kinova_position_SSM_PFL_controller
+  GITHUB GilMM27/kinova_position_SSM_PFL_controller
+  GIT_TAG origin/main
+  DEPENDS mc_rtc human_robot_distance_api
+)
+```
+
+Enable Kinova support and the SMPL-H playback bridge in the superbuild, then run `mc_build`. The shared API package supplies the snapshot header, so the controller does not need patched `mc_mujoco` headers at compile time. The superbuild's playback bridge is one runtime publisher of the snapshot. Another SMPL-H module can supply it if it publishes the same datastore key and C++ schema. The controller still expects the Kinova robot, its `tool_frame`, and the monitored joint and region names.
+
+The smoke test requires the Kinova robot module and is disabled by default. Configure with `-DBUILD_TESTING=ON` to run it; the shared API package must be installed before configuring.
 
 ## Run
 

@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CXX_DISABLE_WERROR 1)
 
 find_package(mc_rtc REQUIRED)
+find_package(human_robot_distance_api 2 CONFIG REQUIRED)
 
 add_subdirectory(src)
 
@@ -15,6 +16,7 @@ configure_file(etc/KinovaPositionSSMPFLController.in.yaml
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/etc/KinovaPositionSSMPFLController.yaml"
   DESTINATION "${MC_CONTROLLER_RUNTIME_INSTALL_PREFIX}/etc")
 
+option(BUILD_TESTING "Build tests that require the Kinova robot module" OFF)
 include(CTest)
 if(BUILD_TESTING)
   add_executable(kinova_position_ssm_pfl_smoke_test
