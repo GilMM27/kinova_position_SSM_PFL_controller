@@ -1,0 +1,24 @@
+# Example for KinovaPositionSSMPFLController. Tune values for the experiment.
+# These are unverified simulation values, not calibrated safety limits.
+SSMPFL:
+  Weight: 1.0e6 # optional; omit for hard speed rows
+  StoppingTimeSeconds: 0.5
+  MaxSampleAgeSeconds: 0.1
+  MaxModelWitnessErrorM: 0.1
+  MinDirectionalInverseMass: 1.0e-12
+  MinMassEigenvalue: 1.0e-9
+  Regions:
+    head:             {ForceMaxN: 65.0, StiffnessNPerM: 150000.0, DistanceMarginM: 0.05}
+    torso:            {ForceMaxN: 110.0, StiffnessNPerM: 50000.0, DistanceMarginM: 0.05}
+    left_upper_arm:   {ForceMaxN: 150.0, StiffnessNPerM: 30000.0, DistanceMarginM: 0.05}
+    left_forearm:     {ForceMaxN: 160.0, StiffnessNPerM: 40000.0, DistanceMarginM: 0.05}
+    left_hand:        {ForceMaxN: 140.0, StiffnessNPerM: 75000.0, DistanceMarginM: 0.05}
+    right_upper_arm:  {ForceMaxN: 150.0, StiffnessNPerM: 30000.0, DistanceMarginM: 0.05}
+    right_forearm:    {ForceMaxN: 160.0, StiffnessNPerM: 40000.0, DistanceMarginM: 0.05}
+    right_hand:       {ForceMaxN: 140.0, StiffnessNPerM: 75000.0, DistanceMarginM: 0.05}
+    left_thigh:       {ForceMaxN: 220.0, StiffnessNPerM: 50000.0, DistanceMarginM: 0.05}
+    left_lower_leg:   {ForceMaxN: 130.0, StiffnessNPerM: 60000.0, DistanceMarginM: 0.05}
+    left_foot:        {ForceMaxN: 130.0, StiffnessNPerM: 60000.0, DistanceMarginM: 0.05}
+    right_thigh:      {ForceMaxN: 220.0, StiffnessNPerM: 50000.0, DistanceMarginM: 0.05}
+    right_lower_leg: {ForceMaxN: 130.0, StiffnessNPerM: 60000.0, DistanceMarginM: 0.05}
+    right_foot:       {ForceMaxN: 130.0, StiffnessNPerM: 60000.0, DistanceMarginM: 0.05}
