@@ -8,17 +8,11 @@
 
 ## Build with the superbuild
 
-The superbuild registers this repository in `extensions/kinova_position_SSM_PFL_controller.cmake` by adding:
+The superbuild registers this repository in `extensions/kinova_position_SSM_PFL_controller.cmake` and builds `mc_mujoco` first when SMPL-H logging is enabled, so its public contact snapshot header is available to the controller.
 
-```
-AddProject(kinova_position_SSM_PFL_controller
-  GITHUB GilMM27/kinova_position_SSM_PFL_controller
-  GIT_TAG origin/main
-  DEPENDS mc_rtc human_robot_distance_api
-)
-```
+Enable Kinova support and SMPL-H playback in the superbuild, then run `mc_build`. Standalone builds can leave `WITH_SMPLH_CONTACT_LOGGING=OFF` to omit the simulator header dependency. The controller still expects the Kinova robot, its `tool_frame`, and the monitored joint and region names.
 
-Enable Kinova support and the SMPL-H playback bridge in the superbuild, then run `mc_build`. The shared API package supplies the snapshot header, so the controller does not need patched `mc_mujoco` headers at compile time. The superbuild's playback bridge is one runtime publisher of the snapshot. Another SMPL-H module can supply it if it publishes the same datastore key and C++ schema. The controller still expects the Kinova robot, its `tool_frame`, and the monitored joint and region names.
+With contact logging enabled, `SMPLH_selected_point_torque_force_N` and `SMPLH_selected_point_mujoco_force_N` provide a pointwise proxy comparison for the selected closest region/link. Use `SMPLH_selected_point_force_valid` to identify comparable samples; `SMPLH_selected_point_force_difference_N` is their signed difference. `SMPLH_selected_point_ForceMaxN` follows that region's configured limit. Regional `ForceMaxN` and exceedance use the solved MuJoCo force sum (`SMPLH_<region>_positive_normal_sum_N`). These simulation estimates are not physical force-limit measurements.
 
 The smoke test requires the Kinova robot module and is disabled by default. Configure with `-DBUILD_TESTING=ON` to run it; the shared API package must be installed before configuring.
 

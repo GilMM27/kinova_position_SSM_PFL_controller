@@ -1,5 +1,8 @@
 #include "KinovaPositionSSMPFLController.h"
 #include "SSMPFLMath.h"
+#ifdef WITH_SMPLH_CONTACT_LOGGING
+#  include <mc_mujoco/SmplhContactForces.h>
+#endif
 
 #include <mc_rbdyn/RobotLoader.h>
 #include <mc_rtc/gui/Label.h>
@@ -128,6 +131,38 @@ KinovaPositionSSMPFLController::KinovaPositionSSMPFLController(
       mc_rtc::log::error_and_throw("Invalid SSMPFL parameters for {}", name);
     regionParameters_[name] = parameters;
   }
+#ifdef WITH_SMPLH_CONTACT_LOGGING
+  for(size_t i = 0; i < smplh_contact::regions.size(); ++i)
+  {
+    regionLimitN_[i] = regionParameters_.at(smplh_contact::regions[i]).force;
+    const std::string prefix = std::string("SMPLH_") + smplh_contact::regions[i] + "_";
+    logger().addLogEntry(prefix + "positive_normal_sum_N", [this, i]() { return regionNormalN_[i]; });
+    logger().addLogEntry(prefix + "positive_normal_peak_N", [this, i]() { return regionPeakN_[i]; });
+    logger().addLogEntry(prefix + "ForceMaxN", [this, i]() { return regionLimitN_[i]; });
+    logger().addLogEntry(prefix + "exceeded", [this, i]() { return regionExceeded_[i]; });
+    logger().addLogEntry(prefix + "peak_exceeded", [this, i]() { return regionPeakN_[i] > regionLimitN_[i]; });
+  }
+  logger().addLogEntry("SMPLH_selected_point_torque_force_N", [this]() { return selectedTorqueForceN_; });
+  logger().addLogEntry("SMPLH_selected_point_mujoco_force_N", [this]() { return selectedMujocoForceN_; });
+  logger().addLogEntry("SMPLH_selected_point_force_difference_N", [this]() { return selectedForceDifferenceN_; });
+  logger().addLogEntry("SMPLH_selected_point_force_valid", [this]() { return selectedPointForceValid_; });
+  logger().addLogEntry("SMPLH_selected_point_ForceMaxN", [this]() {
+    if(selectedPointForceValid_ && selectedForceRegion_ >= 0
+       && static_cast<size_t>(selectedForceRegion_) < regionLimitN_.size())
+      return regionLimitN_[static_cast<size_t>(selectedForceRegion_)];
+    if(contactSelection_.valid && contactSelection_.region < regionLimitN_.size())
+      return regionLimitN_[contactSelection_.region];
+    return std::numeric_limits<double>::quiet_NaN();
+  });
+  logger().addLogEntry("SMPLH_selected_point_contact_distance_m", [this]() { return selectedContactPointDistanceM_; });
+  logger().addLogEntry("SMPLH_selected_point_region_index", [this]() {
+    return static_cast<double>(selectedForceRegion_);
+  });
+  logger().addLogEntry("SMPLH_force_sample_available", [this]() { return forceSampleAvailable_; });
+  logger().addLogEntry("SMPLH_external_joint_torque_norm_Nm", [this]() { return externalJointTorqueNormNm_; });
+  logger().addLogEntry("SMPLH_external_torque_feedback_enabled", [this]() { return externalTorqueFeedback_; });
+  logger().addLogEntry("SMPLH_high_pass_compensation_enabled", [this]() { return highPassCompensation_; });
+#endif
 
   // Allocate one TVM row per region/link pair. An optional positive Weight
   // adds penalized slack; without it, the speed rows are hard constraints.
@@ -227,7 +262,67 @@ void KinovaPositionSSMPFLController::reset(const mc_control::ControllerResetData
   pairSpeedBudget_.fill(std::numeric_limits<double>::quiet_NaN());
   pairSoftSlack_.fill(0);
   speedPlot_ = SpeedPlotSample{};
+#ifdef WITH_SMPLH_CONTACT_LOGGING
+  regionNormalN_.fill(0);
+  regionPeakN_.fill(0);
+  regionExceeded_.fill(false);
+  forceSampleAvailable_ = false;
+  externalTorqueFeedback_ = false;
+  highPassCompensation_ = false;
+  externalJointTorqueNormNm_ = 0;
+  contactSelection_ = {};
+  selectedPointForceValid_ = false;
+  selectedForceRegion_ = -1;
+  selectedTorqueForceN_ = selectedMujocoForceN_ = selectedForceDifferenceN_ = selectedContactPointDistanceM_
+      = std::numeric_limits<double>::quiet_NaN();
+  publishContactSelection();
+#endif
 }
+
+#ifdef WITH_SMPLH_CONTACT_LOGGING
+void KinovaPositionSSMPFLController::publishContactSelection()
+{
+  auto & store = datastore();
+  if(!store.has(smplh_contact::selectionDatastoreKey))
+    store.make<smplh_contact::Selection>(smplh_contact::selectionDatastoreKey);
+  store.assign<smplh_contact::Selection>(smplh_contact::selectionDatastoreKey, contactSelection_);
+}
+
+void KinovaPositionSSMPFLController::updateContactForces()
+{
+  regionNormalN_.fill(0);
+  regionPeakN_.fill(0);
+  selectedPointForceValid_ = false;
+  selectedForceRegion_ = -1;
+  selectedTorqueForceN_ = selectedMujocoForceN_ = selectedForceDifferenceN_ = selectedContactPointDistanceM_
+      = std::numeric_limits<double>::quiet_NaN();
+  forceSampleAvailable_ = false;
+  if(datastore().has(smplh_contact::datastoreKey))
+  {
+    const auto & forces = datastore().get<smplh_contact::Snapshot>(smplh_contact::datastoreKey);
+    forceSampleAvailable_ = forces.valid;
+    if(forceSampleAvailable_)
+    {
+      regionNormalN_ = forces.positiveNormalSumN;
+      regionPeakN_ = forces.peakPositiveNormalSumN;
+      selectedPointForceValid_ = forces.selectedPointValid && forces.selectedRegion < regionLimitN_.size();
+      selectedForceRegion_ = selectedPointForceValid_ ? static_cast<int>(forces.selectedRegion) : -1;
+      if(selectedPointForceValid_)
+      {
+        selectedTorqueForceN_ = forces.selectedTorqueForceN;
+        selectedMujocoForceN_ = forces.selectedMujocoForceN;
+        selectedForceDifferenceN_ = forces.selectedForceDifferenceN;
+        selectedContactPointDistanceM_ = forces.selectedContactPointDistanceM;
+      }
+    }
+    externalTorqueFeedback_ = forces.externalTorqueFeedback;
+    highPassCompensation_ = forces.highPassCompensation;
+    externalJointTorqueNormNm_ = forces.externalJointTorqueNormNm;
+  }
+  for(size_t i = 0; i < regionNormalN_.size(); ++i)
+    regionExceeded_[i] = forceSampleAvailable_ && regionNormalN_[i] > regionLimitN_[i];
+}
+#endif
 
 const human_robot_distance::Snapshot * KinovaPositionSSMPFLController::distanceSnapshot() const
 {
@@ -256,6 +351,10 @@ void KinovaPositionSSMPFLController::holdTarget(const std::string & reason)
   pairSpeedBudget_.fill(std::numeric_limits<double>::quiet_NaN());
   pairSoftSlack_.fill(0);
   speedPlot_ = SpeedPlotSample{};
+#ifdef WITH_SMPLH_CONTACT_LOGGING
+  contactSelection_ = {};
+  publishContactSelection();
+#endif
   safetyConstraint_->clear();
   // Discard the previous GUI target. A fresh target is required after the
   // measurement recovers, so motion cannot resume unexpectedly.
@@ -264,6 +363,9 @@ void KinovaPositionSSMPFLController::holdTarget(const std::string & reason)
 
 bool KinovaPositionSSMPFLController::updateSafetyRows()
 {
+#ifdef WITH_SMPLH_CONTACT_LOGGING
+  contactSelection_ = {};
+#endif
   // The distance worker is asynchronous. Never reuse rows from a prior tick
   // when a snapshot is absent, stale, incomplete, or inconsistent.
   safetyConstraint_->clear();
@@ -374,6 +476,21 @@ bool KinovaPositionSSMPFLController::updateSafetyRows()
         speedPlot_.limit = budget;
         speedPlot_.drift = drift;
         speedPlot_.directional = directional;
+#ifdef WITH_SMPLH_CONTACT_LOGGING
+        const auto regionIt = std::find(smplh_contact::regions.begin(), smplh_contact::regions.end(), region);
+        if(regionIt != smplh_contact::regions.end())
+        {
+          contactSelection_.valid = true;
+          contactSelection_.time = time_;
+          contactSelection_.region = static_cast<size_t>(std::distance(smplh_contact::regions.begin(), regionIt));
+          contactSelection_.robotBody = sample.robot_body;
+          for(int k = 0; k < 3; ++k)
+          {
+            contactSelection_.position[k] = sample.robot_point[k];
+            contactSelection_.normal[k] = n[k];
+          }
+        }
+#endif
         speedPlot_.sampled = std::numeric_limits<double>::quiet_NaN();
         if(sample.robot_velocity_valid)
         {
@@ -390,6 +507,9 @@ bool KinovaPositionSSMPFLController::updateSafetyRows()
     catch(const std::exception &) { holdTarget("invalid pointwise row at " + label); return false; }
   }
   safetyConstraint_->commit();
+#ifdef WITH_SMPLH_CONTACT_LOGGING
+  publishContactSelection();
+#endif
   fallback_ = false;
   fallbackReason_.clear();
   speedPlot_.valid = true;
@@ -398,6 +518,9 @@ bool KinovaPositionSSMPFLController::updateSafetyRows()
 
 bool KinovaPositionSSMPFLController::run()
 {
+#ifdef WITH_SMPLH_CONTACT_LOGGING
+  updateContactForces();
+#endif
   // Run the FSM lifecycle without solving, install this tick's distance rows,
   // then solve with the current GUI position target.
   mc_control::fsm::Controller::run(mc_solver::FeedbackType::SkipQP);

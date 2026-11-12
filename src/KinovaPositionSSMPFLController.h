@@ -9,6 +9,9 @@
 #include <mc_tasks/PositionTask.h>
 #include <mc_tasks/PostureTask.h>
 #include <RBDyn/FD.h>
+#ifdef WITH_SMPLH_CONTACT_LOGGING
+#  include <mc_mujoco/SmplhContactForces.h>
+#endif
 
 #include <array>
 #include <map>
@@ -43,6 +46,25 @@ private:
   std::unique_ptr<SSMPFLConstraint> safetyConstraint_;
   std::unique_ptr<rbd::ForwardDynamics> inertia_;
   std::map<std::string, RegionParameters> regionParameters_;
+#ifdef WITH_SMPLH_CONTACT_LOGGING
+  std::array<double, 14> regionNormalN_{};
+  std::array<double, 14> regionPeakN_{};
+  std::array<double, 14> regionLimitN_{};
+  std::array<bool, 14> regionExceeded_{};
+  bool forceSampleAvailable_ = false;
+  bool externalTorqueFeedback_ = false;
+  bool highPassCompensation_ = false;
+  double externalJointTorqueNormNm_ = 0;
+  smplh_contact::Selection contactSelection_;
+  double selectedTorqueForceN_ = 0;
+  double selectedMujocoForceN_ = 0;
+  double selectedForceDifferenceN_ = 0;
+  double selectedContactPointDistanceM_ = 0;
+  int selectedForceRegion_ = -1;
+  bool selectedPointForceValid_ = false;
+  void updateContactForces();
+  void publishContactSelection();
+#endif
   bool fallback_ = false;
   bool solverSuccess_ = true;
   double time_ = 0;
