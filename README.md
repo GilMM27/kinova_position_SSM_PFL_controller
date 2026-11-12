@@ -8,11 +8,11 @@
 
 ## Build with the superbuild
 
-The superbuild registers this repository in `extensions/kinova_position_SSM_PFL_controller.cmake` and builds `mc_mujoco` first when SMPL-H logging is enabled. The controller then finds the public contact snapshot header installed by the simulator fork.
+The superbuild registers this repository in `extensions/kinova_position_SSM_PFL_controller.cmake` and builds `mc_mujoco` first when SMPL-H logging is enabled, so its public contact snapshot header is available to the controller.
 
 Enable Kinova support and SMPL-H playback in the superbuild, then run `mc_build`. Standalone builds can leave `WITH_SMPLH_CONTACT_LOGGING=OFF` to omit the simulator header dependency. The controller still expects the Kinova robot, its `tool_frame`, and the monitored joint and region names.
 
-With contact logging enabled, `SMPLH_<region>_positive_normal_sum_N` is the solved MuJoCo force and `SMPLH_<region>_torque_estimated_normal_N` is the one-contact torque projection. Plot both in `mc_log_ui` and use `SMPLH_<region>_torque_estimate_valid` to select comparable samples. Invalid estimates and their signed differences are NaN. `SMPLH_torque_estimate_relative_residual` diagnoses poor fits. `ForceMaxN` and exceedance continue to use the solved contact-force sum.
+With contact logging enabled, `SMPLH_selected_point_torque_force_N` and `SMPLH_selected_point_mujoco_force_N` provide a pointwise proxy comparison for the selected closest region/link. Use `SMPLH_selected_point_force_valid` to identify comparable samples; `SMPLH_selected_point_force_difference_N` is their signed difference. `SMPLH_selected_point_ForceMaxN` follows that region's configured limit. Regional `ForceMaxN` and exceedance use the solved MuJoCo force sum (`SMPLH_<region>_positive_normal_sum_N`). These simulation estimates are not physical force-limit measurements.
 
 The smoke test requires the Kinova robot module and is disabled by default. Configure with `-DBUILD_TESTING=ON` to run it; the shared API package must be installed before configuring.
 
