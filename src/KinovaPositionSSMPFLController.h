@@ -43,6 +43,21 @@ private:
   std::unique_ptr<SSMPFLConstraint> safetyConstraint_;
   std::unique_ptr<rbd::ForwardDynamics> inertia_;
   std::map<std::string, RegionParameters> regionParameters_;
+#ifdef WITH_SMPLH_CONTACT_LOGGING
+  std::array<double, 14> regionNormalN_{};
+  std::array<double, 14> regionPeakN_{};
+  std::array<double, 14> regionLimitN_{};
+  std::array<bool, 14> regionExceeded_{};
+  bool forceSampleAvailable_ = false;
+  bool externalTorqueFeedback_ = false;
+  bool highPassCompensation_ = false;
+  double externalJointTorqueNormNm_ = 0;
+  std::array<double, 14> torqueEstimatedNormalN_{};
+  std::array<bool, 14> torqueEstimateValid_{};
+  double torqueEstimateResidualNm_ = 0;
+  double torqueEstimateRelativeResidual_ = 0;
+  void updateContactForces();
+#endif
   bool fallback_ = false;
   bool solverSuccess_ = true;
   double time_ = 0;

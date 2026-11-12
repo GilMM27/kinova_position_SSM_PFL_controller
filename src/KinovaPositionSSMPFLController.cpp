@@ -1,5 +1,8 @@
 #include "KinovaPositionSSMPFLController.h"
 #include "SSMPFLMath.h"
+#ifdef WITH_SMPLH_CONTACT_LOGGING
+#  include <mc_mujoco/SmplhContactForces.h>
+#endif
 
 #include <mc_rbdyn/RobotLoader.h>
 #include <mc_rtc/gui/Label.h>
@@ -128,6 +131,30 @@ KinovaPositionSSMPFLController::KinovaPositionSSMPFLController(
       mc_rtc::log::error_and_throw("Invalid SSMPFL parameters for {}", name);
     regionParameters_[name] = parameters;
   }
+#ifdef WITH_SMPLH_CONTACT_LOGGING
+  for(size_t i = 0; i < smplh_contact::regions.size(); ++i)
+  {
+    regionLimitN_[i] = regionParameters_.at(smplh_contact::regions[i]).force;
+    const std::string prefix = std::string("SMPLH_") + smplh_contact::regions[i] + "_";
+    logger().addLogEntry(prefix + "positive_normal_sum_N", [this, i]() { return regionNormalN_[i]; });
+    logger().addLogEntry(prefix + "positive_normal_peak_N", [this, i]() { return regionPeakN_[i]; });
+    logger().addLogEntry(prefix + "ForceMaxN", [this, i]() { return regionLimitN_[i]; });
+    logger().addLogEntry(prefix + "exceeded", [this, i]() { return regionExceeded_[i]; });
+    logger().addLogEntry(prefix + "peak_exceeded", [this, i]() { return regionPeakN_[i] > regionLimitN_[i]; });
+    logger().addLogEntry(prefix + "torque_estimated_normal_N", [this, i]() { return torqueEstimatedNormalN_[i]; });
+    logger().addLogEntry(prefix + "torque_estimate_valid", [this, i]() { return torqueEstimateValid_[i]; });
+    logger().addLogEntry(prefix + "torque_minus_contact_normal_N", [this, i]() {
+      return torqueEstimateValid_[i] ? torqueEstimatedNormalN_[i] - regionNormalN_[i]
+                                     : std::numeric_limits<double>::quiet_NaN();
+    });
+  }
+  logger().addLogEntry("SMPLH_force_sample_available", [this]() { return forceSampleAvailable_; });
+  logger().addLogEntry("SMPLH_external_joint_torque_norm_Nm", [this]() { return externalJointTorqueNormNm_; });
+  logger().addLogEntry("SMPLH_external_torque_feedback_enabled", [this]() { return externalTorqueFeedback_; });
+  logger().addLogEntry("SMPLH_high_pass_compensation_enabled", [this]() { return highPassCompensation_; });
+  logger().addLogEntry("SMPLH_torque_estimate_residual_Nm", [this]() { return torqueEstimateResidualNm_; });
+  logger().addLogEntry("SMPLH_torque_estimate_relative_residual", [this]() { return torqueEstimateRelativeResidual_; });
+#endif
 
   // Allocate one TVM row per region/link pair. An optional positive Weight
   // adds penalized slack; without it, the speed rows are hard constraints.
@@ -227,7 +254,48 @@ void KinovaPositionSSMPFLController::reset(const mc_control::ControllerResetData
   pairSpeedBudget_.fill(std::numeric_limits<double>::quiet_NaN());
   pairSoftSlack_.fill(0);
   speedPlot_ = SpeedPlotSample{};
+#ifdef WITH_SMPLH_CONTACT_LOGGING
+  regionNormalN_.fill(0);
+  regionPeakN_.fill(0);
+  regionExceeded_.fill(false);
+  forceSampleAvailable_ = false;
+  externalTorqueFeedback_ = false;
+  highPassCompensation_ = false;
+  externalJointTorqueNormNm_ = 0;
+  torqueEstimatedNormalN_.fill(std::numeric_limits<double>::quiet_NaN());
+  torqueEstimateValid_.fill(false);
+#endif
 }
+
+#ifdef WITH_SMPLH_CONTACT_LOGGING
+void KinovaPositionSSMPFLController::updateContactForces()
+{
+  regionNormalN_.fill(0);
+  torqueEstimatedNormalN_.fill(std::numeric_limits<double>::quiet_NaN());
+  torqueEstimateValid_.fill(false);
+  forceSampleAvailable_ = false;
+  if(datastore().has(smplh_contact::datastoreKey))
+  {
+    const auto & forces = datastore().get<smplh_contact::Snapshot>(smplh_contact::datastoreKey);
+    forceSampleAvailable_ = forces.valid;
+    if(forceSampleAvailable_)
+    {
+      regionNormalN_ = forces.positiveNormalSumN;
+      regionPeakN_ = forces.peakPositiveNormalSumN;
+      torqueEstimateValid_ = forces.torqueEstimateValid;
+      for(size_t i = 0; i < torqueEstimatedNormalN_.size(); ++i)
+        if(torqueEstimateValid_[i]) torqueEstimatedNormalN_[i] = forces.torqueEstimatedNormalN[i];
+    }
+    externalTorqueFeedback_ = forces.externalTorqueFeedback;
+    highPassCompensation_ = forces.highPassCompensation;
+    externalJointTorqueNormNm_ = forces.externalJointTorqueNormNm;
+    torqueEstimateResidualNm_ = forces.torqueEstimateResidualNm;
+    torqueEstimateRelativeResidual_ = forces.torqueEstimateRelativeResidual;
+  }
+  for(size_t i = 0; i < regionNormalN_.size(); ++i)
+    regionExceeded_[i] = forceSampleAvailable_ && regionNormalN_[i] > regionLimitN_[i];
+}
+#endif
 
 const human_robot_distance::Snapshot * KinovaPositionSSMPFLController::distanceSnapshot() const
 {
@@ -398,6 +466,9 @@ bool KinovaPositionSSMPFLController::updateSafetyRows()
 
 bool KinovaPositionSSMPFLController::run()
 {
+#ifdef WITH_SMPLH_CONTACT_LOGGING
+  updateContactForces();
+#endif
   // Run the FSM lifecycle without solving, install this tick's distance rows,
   // then solve with the current GUI position target.
   mc_control::fsm::Controller::run(mc_solver::FeedbackType::SkipQP);

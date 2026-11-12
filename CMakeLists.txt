@@ -7,6 +7,10 @@ set(CXX_DISABLE_WERROR 1)
 
 find_package(mc_rtc REQUIRED)
 find_package(human_robot_distance_api 2 CONFIG REQUIRED)
+option(WITH_SMPLH_CONTACT_LOGGING "Log SMPL-H contact and torque estimates" OFF)
+if(WITH_SMPLH_CONTACT_LOGGING)
+  find_path(SMPLH_CONTACT_INCLUDE_DIR mc_mujoco/SmplhContactForces.h REQUIRED)
+endif()
 
 add_subdirectory(src)
 

@@ -8,17 +8,11 @@
 
 ## Build with the superbuild
 
-The superbuild registers this repository in `extensions/kinova_position_SSM_PFL_controller.cmake` by adding:
+The superbuild registers this repository in `extensions/kinova_position_SSM_PFL_controller.cmake` and builds `mc_mujoco` first when SMPL-H logging is enabled. The controller then finds the public contact snapshot header installed by the simulator fork.
 
-```
-AddProject(kinova_position_SSM_PFL_controller
-  GITHUB GilMM27/kinova_position_SSM_PFL_controller
-  GIT_TAG origin/main
-  DEPENDS mc_rtc human_robot_distance_api
-)
-```
+Enable Kinova support and SMPL-H playback in the superbuild, then run `mc_build`. Standalone builds can leave `WITH_SMPLH_CONTACT_LOGGING=OFF` to omit the simulator header dependency. The controller still expects the Kinova robot, its `tool_frame`, and the monitored joint and region names.
 
-Enable Kinova support and the SMPL-H playback bridge in the superbuild, then run `mc_build`. The shared API package supplies the snapshot header, so the controller does not need patched `mc_mujoco` headers at compile time. The superbuild's playback bridge is one runtime publisher of the snapshot. Another SMPL-H module can supply it if it publishes the same datastore key and C++ schema. The controller still expects the Kinova robot, its `tool_frame`, and the monitored joint and region names.
+With contact logging enabled, `SMPLH_<region>_positive_normal_sum_N` is the solved MuJoCo force and `SMPLH_<region>_torque_estimated_normal_N` is the one-contact torque projection. Plot both in `mc_log_ui` and use `SMPLH_<region>_torque_estimate_valid` to select comparable samples. Invalid estimates and their signed differences are NaN. `SMPLH_torque_estimate_relative_residual` diagnoses poor fits. `ForceMaxN` and exceedance continue to use the solved contact-force sum.
 
 The smoke test requires the Kinova robot module and is disabled by default. Configure with `-DBUILD_TESTING=ON` to run it; the shared API package must be installed before configuring.
 
