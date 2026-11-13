@@ -80,6 +80,7 @@ private:
     double predicted = 0;
     double sampled = 0;
     double limit = 0;
+    double humanApproach = 0;
     double drift = 0;
     Eigen::RowVectorXd directional;
   } speedPlot_;
