@@ -1,10 +1,10 @@
 # Kinova position SSM+PFL controller
 
-`KinovaPositionSSMPFLController` drives the Kinova Gen3 tool to a position target set in `mc_rtc_gui`. It adds SSM+PFL speed rows to the TVM QP and holds the target when human distance samples are missing or stale. The controller builds with `mc_rtc` and the header-only [`human_robot_distance_api`](https://github.com/GilMM27/human_robot_distance_api) package. At runtime it needs the Kinova robot module and a publisher of the `HumanRobotDistance::Snapshot` datastore entry using the shared API header.
+`KinovaPositionSSMPFLController` drives the Kinova Gen3 tool to a position target set in `mc_rtc_gui`. It feeds live distance measurements to the `mc_solver::SSMPFLConstraint` in mc_rtc. When measurements are missing or stale, it keeps the last position command and retains the requested target for automatic retry. The controller builds with `mc_rtc` and the header-only [`human_robot_distance_api`](https://github.com/GilMM27/human_robot_distance_api) package. At runtime it needs the Kinova robot module and a publisher of the `HumanRobotDistance::Snapshot` datastore entry using the shared API header.
 
 ## Source layout
 
-`src/KinovaPositionSSMPFLController.cpp` implements the controller in a shared library. `src/api.h` exports its class symbols, and `src/lib.cpp` registers the loadable mc_rtc controller. `src/CMakeLists.txt` builds and installs both targets. The snapshot type comes from `human_robot_distance_api`; producers and consumers use the same installed header and datastore key.
+`src/KinovaPositionSSMPFLController.cpp` implements the controller in a shared library. `src/api.h` exports its class symbols, and `src/lib.cpp` registers the loadable mc_rtc controller. `src/CMakeLists.txt` builds and installs both targets. The SSM+PFL row math and solver registration live in mc_rtc's `mc_tvm` and `mc_solver` libraries. The snapshot type comes from `human_robot_distance_api`; producers and consumers use the same installed header and datastore key.
 
 ## Build with the superbuild
 
@@ -18,7 +18,7 @@ The smoke test requires the Kinova robot module and is disabled by default. Conf
 
 ## Run
 
-Set `MainRobot: Kinova`, `Enabled: KinovaPositionSSMPFLController`, and `Timestep: 0.001` in `mc_rtc.yaml`. Copy `examples/ssm_pfl_example.yaml` to `~/.config/mc_rtc/controllers/KinovaPositionSSMPFLController.yaml` and set the 14 `SSMPFL.Regions` values for your experiment. Omit `SSMPFL.Weight` for hard speed rows, or set a positive weight for soft rows. The controller uses the sampled human velocity for both moving and held playback. Held playback supplies a valid zero velocity; missing or invalid velocity causes the controller to hold its target. A legacy `SSMPFL.HumanMode` setting is ignored; remove it from existing controller configurations for clarity.
+Set `MainRobot: Kinova`, `Enabled: KinovaPositionSSMPFLController`, and `Timestep: 0.001` in `mc_rtc.yaml`. Copy `examples/ssm_pfl_example.yaml` to `~/.config/mc_rtc/controllers/KinovaPositionSSMPFLController.yaml` and set the 14 `Regions` values under the `constraints:` entry with `type: ssmPfl`. Omit its `Weight` for hard speed rows, or set a positive weight for soft rows. Keep `SSMPFL.MaxSampleAgeSeconds` and `SSMPFL.MaxModelWitnessErrorM` in the controller's input configuration. The controller uses sampled human velocity for both moving and held playback. Held playback supplies a valid zero velocity. Missing or invalid measurements pause command updates; the requested GUI target remains and is retried when valid measurements return. A failed hard QP likewise leaves the last command in place and is retried on the next tick.
 
 `PositionTask.Weight` and `PositionTask.Stiffness` control the tool task. `PostureTask.Weight` and `PostureTask.Stiffness` control the weak posture preference. In `mc_rtc_gui`, move **Tasks → KinovaToolPosition → pos_target** to set the world-frame XYZ target.
 

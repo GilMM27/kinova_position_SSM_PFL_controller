@@ -1,6 +1,5 @@
 #pragma once
 
-#include "SSMPFLConstraint.h"
 #include "api.h"
 
 #include <mc_control/mc_controller.h>
@@ -8,13 +7,12 @@
 #include <human_robot_distance_api/DistanceSnapshot.h>
 #include <mc_tasks/PositionTask.h>
 #include <mc_tasks/PostureTask.h>
-#include <RBDyn/FD.h>
+#include <mc_solver/SSMPFLConstraint.h>
 #ifdef WITH_SMPLH_CONTACT_LOGGING
 #  include <mc_mujoco/SmplhContactForces.h>
 #endif
 
 #include <array>
-#include <map>
 #include <memory>
 #include <string>
 
@@ -29,23 +27,14 @@ struct KinovaPositionSSMPFLController_DLLAPI KinovaPositionSSMPFLController : pu
   bool run() override;
 
 private:
-  struct RegionParameters
-  {
-    double force = 0;
-    double stiffness = 0;
-    double margin = 0;
-  };
-
   const human_robot_distance::Snapshot * distanceSnapshot() const;
   bool updateSafetyRows();
-  void holdTarget(const std::string & reason);
+  void pauseMotion(const std::string & reason);
   void addSpeedPlot();
 
   std::shared_ptr<mc_tasks::PositionTask> positionTask_;
   std::shared_ptr<mc_tasks::PostureTask> postureTask_;
-  std::unique_ptr<SSMPFLConstraint> safetyConstraint_;
-  std::unique_ptr<rbd::ForwardDynamics> inertia_;
-  std::map<std::string, RegionParameters> regionParameters_;
+  std::shared_ptr<mc_solver::SSMPFLConstraint> safetyConstraint_;
 #ifdef WITH_SMPLH_CONTACT_LOGGING
   std::array<double, 14> regionNormalN_{};
   std::array<double, 14> regionPeakN_{};
@@ -69,12 +58,8 @@ private:
   bool solverSuccess_ = true;
   double time_ = 0;
   double sampleAge_ = 0;
-  double stopTime_ = 0.5;
   double maxSampleAge_ = 0.1;
   double maxModelWitnessError_ = 0.1;
-  double minMobility_ = 1e-12;
-  double minMassEigenvalue_ = 1e-9;
-  double safetyWeight_ = 0;
   int activePairs_ = 0;
   double maxSoftSlack_ = 0;
   double limitingSpeed_ = 0;

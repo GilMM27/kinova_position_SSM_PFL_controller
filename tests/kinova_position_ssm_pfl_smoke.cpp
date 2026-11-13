@@ -1,5 +1,7 @@
 #include "../src/KinovaPositionSSMPFLController.h"
 #include <mc_rbdyn/RobotLoader.h>
+#include <mc_solver/TVMQPSolver.h>
+#include <mc_tvm/Robot.h>
 #include <cmath>
 #include <stdexcept>
 #include <array>
@@ -44,10 +46,12 @@ int main(int argc, char ** argv)
   const Eigen::Vector3d initial = controller.robot().frame("tool_frame").position().translation();
   if((task->position() - initial).norm() > 1e-10)
     throw std::runtime_error("position target was not initialized to tool position");
-  task->position(initial + Eigen::Vector3d(0.1, 0.0, 0.0));
+  const Eigen::Vector3d initialTarget = initial + Eigen::Vector3d(0.1, 0.0, 0.0);
+  const auto initialQ = controller.robot().q();
+  task->position(initialTarget);
   if(!controller.run()) throw std::runtime_error("controller failed without a distance sample");
-  if((task->position() - controller.robot().frame("tool_frame").position().translation()).norm() > 1e-3)
-    throw std::runtime_error("missing distance sample did not cancel target motion");
+  if((task->position() - initialTarget).norm() > 1e-10 || controller.robot().q() != initialQ)
+    throw std::runtime_error("missing distance sample changed the target or command");
 
   human_robot_distance::Snapshot snapshot;
   snapshot.ready = true;
@@ -83,19 +87,25 @@ int main(int argc, char ** argv)
 
   snapshot.sample_simulation_time = -1.0;
   controller.datastore().assign(human_robot_distance::datastoreKey, snapshot);
+  const auto beforeStaleQ = controller.robot().q();
   if(!controller.run()) throw std::runtime_error("controller failed while holding on stale sample");
-  if((task->position() - target).norm() < 1e-5)
-    throw std::runtime_error("stale sample did not cancel target motion");
+  if((task->position() - target).norm() > 1e-10 || controller.robot().q() != beforeStaleQ)
+    throw std::runtime_error("stale sample changed the target or command");
 
   snapshot.sample_simulation_time = 0.003;
   snapshot.regions.front().human_velocity_valid = false;
   controller.datastore().assign(human_robot_distance::datastoreKey, snapshot);
   task->position(target);
   if(!controller.run()) throw std::runtime_error("controller failed while holding on invalid human velocity");
-  if((task->position() - target).norm() < 1e-5)
-    throw std::runtime_error("invalid human velocity did not cancel target motion");
+  if((task->position() - target).norm() > 1e-10 || controller.robot().q() != beforeStaleQ)
+    throw std::runtime_error("invalid human velocity changed the target or command");
+  snapshot.sample_simulation_time = 0.004;
+  snapshot.regions.front().human_velocity_valid = true;
+  controller.datastore().assign(human_robot_distance::datastoreKey, snapshot);
+  if(!controller.run() || (task->position() - target).norm() > 1e-10)
+    throw std::runtime_error("valid measurements did not restore the saved target");
 
-  config("SSMPFL").remove("Weight"); // Exercise hard speed rows without slack.
+  config("constraints")[0].remove("Weight"); // Exercise hard speed rows without slack.
   config("PositionTask").add("Weight", 7.5);
   config("PositionTask").add("Stiffness", 5.0);
   KinovaPositionSSMPFLController heldController(module, 0.001, config);
@@ -122,6 +132,24 @@ int main(int argc, char ** argv)
   if((heldTask->position() - heldTarget).norm() > 1e-10)
     throw std::runtime_error("held playback with valid zero velocity was rejected");
 
+  // Make two priority-0 acceleration bounds contradictory for one tick.
+  auto & tvmSolver = mc_solver::TVMQPSolver::from_solver(heldController.solver());
+  auto acceleration = heldController.robot().tvmRobot().alphaD();
+  auto lower = tvmSolver.problem().add(acceleration >= 1e6, {tvm::requirements::PriorityLevel(0)});
+  auto upper = tvmSolver.problem().add(acceleration <= -1e6, {tvm::requirements::PriorityLevel(0)});
+  const auto beforeFailureQ = heldController.robot().q();
+  snapshot.sample_simulation_time = 0.002;
+  heldController.datastore().assign(human_robot_distance::datastoreKey, snapshot);
+  if(!heldController.run()) throw std::runtime_error("hard QP failure stopped the controller");
+  if(heldController.robot().q() != beforeFailureQ || (heldTask->position() - heldTarget).norm() > 1e-10)
+    throw std::runtime_error("hard QP failure changed the command or target");
+  tvmSolver.problem().remove(*upper);
+  tvmSolver.problem().remove(*lower);
+  snapshot.sample_simulation_time = 0.003;
+  heldController.datastore().assign(human_robot_distance::datastoreKey, snapshot);
+  if(!heldController.run() || (heldTask->position() - heldTarget).norm() > 1e-10)
+    throw std::runtime_error("hard QP did not recover after conflict removal");
+
   KinovaPositionSSMPFLController wrongTypeController(module, 0.001, config);
   wrongTypeController.reset({wrongTypeController.robot().q()});
   wrongTypeController.datastore().make<int>(human_robot_distance::datastoreKey, 1);
@@ -130,6 +158,6 @@ int main(int argc, char ** argv)
   const Eigen::Vector3d wrongTypeTarget = wrongTypeTask->position() + Eigen::Vector3d(0.02, 0.0, 0.0);
   wrongTypeTask->position(wrongTypeTarget);
   if(!wrongTypeController.run()) throw std::runtime_error("controller failed on an incompatible snapshot type");
-  if((wrongTypeTask->position() - wrongTypeTarget).norm() < 1e-5)
-    throw std::runtime_error("incompatible snapshot type did not cancel target motion");
+  if((wrongTypeTask->position() - wrongTypeTarget).norm() > 1e-10)
+    throw std::runtime_error("incompatible snapshot type changed the target");
 }
