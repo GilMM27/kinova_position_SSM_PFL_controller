@@ -43,5 +43,7 @@ constraints:
       right_foot:
         { ForceMaxN: 130.0, StiffnessNPerM: 60000.0, DistanceMarginM: 0.05 }
 SSMPFL:
+  # collision uses SMPL-H contact capsules; mesh uses the SMPL-H surface.
+  SeparationGeometry: collision
   MaxSampleAgeSeconds: 0.25
   MaxModelWitnessErrorM: 0.25
