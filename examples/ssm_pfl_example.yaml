@@ -23,5 +23,6 @@ constraints:
       right_lower_leg: {ForceMaxN: 130.0, StiffnessNPerM: 60000.0, DistanceMarginM: 0.05}
       right_foot:       {ForceMaxN: 130.0, StiffnessNPerM: 60000.0, DistanceMarginM: 0.05}
 SSMPFL:
+  SeparationGeometry: collision # use the SMPL-H contact capsules for separation
   MaxSampleAgeSeconds: 0.1
   MaxModelWitnessErrorM: 0.1
