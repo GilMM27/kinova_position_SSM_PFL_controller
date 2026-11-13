@@ -179,6 +179,22 @@ KinovaPositionSSMPFLController::KinovaPositionSSMPFLController(
   logger().addLogEntry("SSMPFL_closest_distance_m", [this]() {
     return speedPlot_.valid ? speedPlot_.distance : std::numeric_limits<double>::quiet_NaN();
   });
+  logger().addLogEntry("SSMPFL_closest_relative_speed_mps", [this]() {
+    return speedPlot_.valid ? speedPlot_.current - speedPlot_.humanApproach
+                            : std::numeric_limits<double>::quiet_NaN();
+  });
+  logger().addLogEntry("SSMPFL_closest_relative_speed_limit_mps", [this]() {
+    return speedPlot_.valid ? speedPlot_.limit - speedPlot_.humanApproach
+                            : std::numeric_limits<double>::quiet_NaN();
+  });
+  logger().addLogEntry("SSMPFL_closest_sampled_relative_speed_mps", [this]() {
+    return speedPlot_.valid ? speedPlot_.sampled - speedPlot_.humanApproach
+                            : std::numeric_limits<double>::quiet_NaN();
+  });
+  logger().addLogEntry("SSMPFL_closest_predicted_relative_speed_mps", [this]() {
+    return speedPlot_.valid ? speedPlot_.predicted - speedPlot_.humanApproach
+                            : std::numeric_limits<double>::quiet_NaN();
+  });
   for(size_t i = 0; i < pairSpeedBudget_.size(); ++i)
   {
     const std::string prefix = std::string("SSMPFLPair_") + regions[i / links.size()] + "_"
@@ -411,6 +427,7 @@ bool KinovaPositionSSMPFLController::updateSafetyRows()
   speedPlot_.distance = closest.distance;
   speedPlot_.current = closestRow.robotApproach;
   speedPlot_.limit = closestRow.robotSpeedBudget;
+  speedPlot_.humanApproach = measurements[closestIndex].normal.dot(measurements[closestIndex].humanVelocity);
   speedPlot_.drift = closestRow.jacobianDrift;
   speedPlot_.directional = closestRow.directionalJacobian;
   speedPlot_.sampled = std::numeric_limits<double>::quiet_NaN();

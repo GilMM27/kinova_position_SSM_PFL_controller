@@ -1,0 +1,36 @@
+[
+  [
+    "SSM+PFL force and closest relative speed",
+    "t",
+    [
+      "SMPLH_selected_point_mujoco_force_N",
+      "SMPLH_selected_point_torque_force_N",
+      "SMPLH_selected_point_ForceMaxN"
+    ],
+    [],
+    [
+      "SSMPFL_closest_relative_speed_mps",
+      "SSMPFL_closest_relative_speed_limit_mps"
+    ],
+    [],
+    {"color": "#cccccc", "linestyle": ":", "linewidth": 0.8, "visible": true, "label": ""},
+    {"color": "#cccccc", "linestyle": ":", "linewidth": 0.8, "visible": false, "label": ""},
+    {
+      "SMPLH_selected_point_mujoco_force_N": {"color": "#1f77b4", "linestyle": "-", "linewidth": 1.5, "visible": true, "label": "MuJoCo force"},
+      "SMPLH_selected_point_torque_force_N": {"color": "#ff7f0e", "linestyle": "-", "linewidth": 1.5, "visible": true, "label": "Torque force"},
+      "SMPLH_selected_point_ForceMaxN": {"color": "#d62728", "linestyle": "--", "linewidth": 1.5, "visible": true, "label": "Force limit"}
+    },
+    {
+      "SSMPFL_closest_relative_speed_mps": {"color": "#2ca02c", "linestyle": "-", "linewidth": 1.5, "visible": true, "label": "Relative approach"},
+      "SSMPFL_closest_relative_speed_limit_mps": {"color": "#9467bd", "linestyle": "--", "linewidth": 1.5, "visible": true, "label": "Relative speed limit"}
+    },
+    {
+      "title": {"text": "SSM+PFL force and closest relative speed", "fontsize": 12},
+      "x_label": {"text": "Time (s)", "fontsize": 10},
+      "y1_label": {"text": "Force (N)", "fontsize": 10},
+      "y2_label": {"text": "Relative approach speed (m/s)", "fontsize": 10}
+    },
+    {},
+    0
+  ]
+]
