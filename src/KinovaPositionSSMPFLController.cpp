@@ -1,5 +1,4 @@
 #include "KinovaPositionSSMPFLController.h"
-#include "SSMPFLMath.h"
 #ifdef WITH_SMPLH_CONTACT_LOGGING
 #  include <mc_mujoco/SmplhContactForces.h>
 #endif
@@ -7,8 +6,6 @@
 #include <mc_rbdyn/RobotLoader.h>
 #include <mc_rtc/gui/Label.h>
 #include <mc_rtc/gui/plot.h>
-#include <mc_tvm/Robot.h>
-#include <RBDyn/Jacobian.h>
 #include <RBDyn/MultiBodyConfig.h>
 
 #include <algorithm>
@@ -94,47 +91,31 @@ KinovaPositionSSMPFLController::KinovaPositionSSMPFLController(
   postureTask_->name("KinovaPreferredPosture");
   solver().addTask(postureTask_);
 
-  if(!config.has("SSMPFL")) mc_rtc::log::error_and_throw("Missing SSMPFL configuration");
-  const auto safety = config("SSMPFL");
-  if(!safety.has("Regions")) mc_rtc::log::error_and_throw("SSMPFL.Regions is required");
-  if(safety.has("Weight"))
+  for(const auto & constraint : constraints_)
   {
-    safety("Weight", safetyWeight_);
-    if(!std::isfinite(safetyWeight_) || safetyWeight_ <= 0)
-      mc_rtc::log::error_and_throw("SSMPFL.Weight must be a positive finite value");
+    auto ssmPfl = std::dynamic_pointer_cast<mc_solver::SSMPFLConstraint>(constraint);
+    if(ssmPfl)
+    {
+      if(safetyConstraint_) mc_rtc::log::error_and_throw("Kinova requires exactly one ssmPfl constraint");
+      safetyConstraint_ = std::move(ssmPfl);
+    }
   }
-  safety("StoppingTimeSeconds", stopTime_);
+  if(!safetyConstraint_ || safetyConstraint_->capacity() != regions.size() * links.size())
+    mc_rtc::log::error_and_throw("Kinova requires one ssmPfl constraint with capacity 98");
+  for(const auto * name : regions)
+    if(!safetyConstraint_->regions().count(name))
+      mc_rtc::log::error_and_throw("Missing SSM+PFL region {}", name);
+  if(!config.has("SSMPFL")) mc_rtc::log::error_and_throw("Missing SSMPFL input configuration");
+  const auto safety = config("SSMPFL");
   safety("MaxSampleAgeSeconds", maxSampleAge_);
   safety("MaxModelWitnessErrorM", maxModelWitnessError_);
-  safety("MinDirectionalInverseMass", minMobility_);
-  safety("MinMassEigenvalue", minMassEigenvalue_);
-  if(!std::isfinite(stopTime_) || stopTime_ <= 0
-     || !std::isfinite(maxSampleAge_) || maxSampleAge_ <= 0
-     || !std::isfinite(maxModelWitnessError_) || maxModelWitnessError_ <= 0
-     || !std::isfinite(minMobility_) || minMobility_ < 0
-     || !std::isfinite(minMassEigenvalue_) || minMassEigenvalue_ <= 0)
+  if(!std::isfinite(maxSampleAge_) || maxSampleAge_ <= 0
+     || !std::isfinite(maxModelWitnessError_) || maxModelWitnessError_ <= 0)
     mc_rtc::log::error_and_throw("Invalid SSMPFL tolerance");
-  const auto configuredRegions = safety("Regions");
-  for(const auto * name : regions)
-  {
-    if(!configuredRegions.has(name)) mc_rtc::log::error_and_throw("Missing SSMPFL region {}", name);
-    const auto entry = configuredRegions(name);
-    if(!entry.has("ForceMaxN") || !entry.has("StiffnessNPerM"))
-      mc_rtc::log::error_and_throw("SSMPFL region {} needs ForceMaxN and StiffnessNPerM", name);
-    RegionParameters parameters;
-    entry("ForceMaxN", parameters.force);
-    entry("StiffnessNPerM", parameters.stiffness);
-    entry("DistanceMarginM", parameters.margin);
-    if(!std::isfinite(parameters.force) || parameters.force < 0
-       || !std::isfinite(parameters.stiffness) || parameters.stiffness <= 0
-       || !std::isfinite(parameters.margin) || parameters.margin < 0)
-      mc_rtc::log::error_and_throw("Invalid SSMPFL parameters for {}", name);
-    regionParameters_[name] = parameters;
-  }
 #ifdef WITH_SMPLH_CONTACT_LOGGING
   for(size_t i = 0; i < smplh_contact::regions.size(); ++i)
   {
-    regionLimitN_[i] = regionParameters_.at(smplh_contact::regions[i]).force;
+    regionLimitN_[i] = safetyConstraint_->regions().at(smplh_contact::regions[i]).forceMaxN;
     const std::string prefix = std::string("SMPLH_") + smplh_contact::regions[i] + "_";
     logger().addLogEntry(prefix + "positive_normal_sum_N", [this, i]() { return regionNormalN_[i]; });
     logger().addLogEntry(prefix + "positive_normal_peak_N", [this, i]() { return regionPeakN_[i]; });
@@ -164,17 +145,9 @@ KinovaPositionSSMPFLController::KinovaPositionSSMPFLController(
   logger().addLogEntry("SMPLH_high_pass_compensation_enabled", [this]() { return highPassCompensation_; });
 #endif
 
-  // Allocate one TVM row per region/link pair. An optional positive Weight
-  // adds penalized slack; without it, the speed rows are hard constraints.
-  safetyConstraint_.reset(new SSMPFLConstraint(robot().tvmRobot().alphaD(), robot().mb().nrDof(),
-                                                static_cast<int>(regions.size() * links.size()),
-                                                true, safetyWeight_));
-  safetyConstraint_->addToSolver(mc_solver::TVMQPSolver::from_solver(solver()));
-  inertia_.reset(new rbd::ForwardDynamics(robot().mb()));
-
   gui()->addElement({"SSM+PFL"},
                     mc_rtc::gui::Label("State", [this]() {
-                      return fallback_ ? std::string("Holding: ") + fallbackReason_ : std::string("QP running");
+                      return fallback_ ? std::string("Paused: ") + fallbackReason_ : std::string("QP running");
                     }),
                     mc_rtc::gui::Label("Active pairs", [this]() { return std::to_string(activePairs_); }),
                     mc_rtc::gui::Label("Limiting pair", [this]() { return limitingPair_; }),
@@ -215,11 +188,7 @@ KinovaPositionSSMPFLController::KinovaPositionSSMPFLController(
   }
 }
 
-KinovaPositionSSMPFLController::~KinovaPositionSSMPFLController()
-{
-  if(safetyConstraint_)
-    safetyConstraint_->removeFromSolver(mc_solver::TVMQPSolver::from_solver(solver()));
-}
+KinovaPositionSSMPFLController::~KinovaPositionSSMPFLController() = default;
 
 void KinovaPositionSSMPFLController::addSpeedPlot()
 {
@@ -339,9 +308,9 @@ const human_robot_distance::Snapshot * KinovaPositionSSMPFLController::distanceS
   }
 }
 
-void KinovaPositionSSMPFLController::holdTarget(const std::string & reason)
+void KinovaPositionSSMPFLController::pauseMotion(const std::string & reason)
 {
-  if(!fallback_ || fallbackReason_ != reason) mc_rtc::log::warning("SSM+PFL holding tool: {}", reason);
+  if(!fallback_ || fallbackReason_ != reason) mc_rtc::log::warning("SSM+PFL pausing command: {}", reason);
   fallback_ = true;
   fallbackReason_ = reason;
   activePairs_ = 0;
@@ -355,10 +324,9 @@ void KinovaPositionSSMPFLController::holdTarget(const std::string & reason)
   contactSelection_ = {};
   publishContactSelection();
 #endif
+  // No QP is run for this tick, so the last robot position command is retained.
+  // Keep the GUI target for automatic recovery when measurements return.
   safetyConstraint_->clear();
-  // Discard the previous GUI target. A fresh target is required after the
-  // measurement recovers, so motion cannot resume unexpectedly.
-  positionTask_->position(robot().frame("tool_frame").position().translation());
 }
 
 bool KinovaPositionSSMPFLController::updateSafetyRows()
@@ -366,8 +334,6 @@ bool KinovaPositionSSMPFLController::updateSafetyRows()
 #ifdef WITH_SMPLH_CONTACT_LOGGING
   contactSelection_ = {};
 #endif
-  // The distance worker is asynchronous. Never reuse rows from a prior tick
-  // when a snapshot is absent, stale, incomplete, or inconsistent.
   safetyConstraint_->clear();
   activePairs_ = 0;
   limitingPair_ = "none";
@@ -376,138 +342,99 @@ bool KinovaPositionSSMPFLController::updateSafetyRows()
   pairSoftSlack_.fill(0);
   speedPlot_ = SpeedPlotSample{};
   const auto * snapshot = distanceSnapshot();
-  if(!snapshot) { holdTarget("distance snapshot unavailable or worker error"); return false; }
+  if(!snapshot) { pauseMotion("distance snapshot unavailable or worker error"); return false; }
   sampleAge_ = time_ - snapshot->sample_simulation_time;
   if(!std::isfinite(sampleAge_) || sampleAge_ < -solver().dt() || sampleAge_ > maxSampleAge_)
-  { holdTarget("distance sample stale or timestamp invalid"); return false; }
+  { pauseMotion("distance sample stale or timestamp invalid"); return false; }
   if(snapshot->regions.size() != regions.size() * links.size())
-  { holdTarget("missing monitored region/link pairs"); return false; }
+  { pauseMotion("missing monitored region/link pairs"); return false; }
   std::map<std::pair<std::string, std::string>, const human_robot_distance::RegionDistance *> samples;
   for(const auto & sample : snapshot->regions)
     if(!samples.emplace(std::make_pair(sample.region, sample.link), &sample).second)
-    { holdTarget("duplicate region/link pair"); return false; }
+    { pauseMotion("duplicate region/link pair"); return false; }
 
-  const auto & mb = robot().mb();
-  const auto & mbc = robot().mbc();
-  const int dofs = mb.nrDof();
-  const Eigen::VectorXd qdot = rbd::dofToVector(mb, robot().alpha());
-  if(qdot.size() != dofs || !qdot.allFinite())
-  { holdTarget("invalid model joint velocity"); return false; }
-  inertia_->computeH(mb, mbc);
-  const Eigen::MatrixXd & mass = inertia_->H();
-  if(mass.rows() != dofs || mass.cols() != dofs || !mass.allFinite())
-  { holdTarget("invalid inertia matrix"); return false; }
-  const Eigen::LDLT<Eigen::MatrixXd> factor(mass);
-  if(factor.info() != Eigen::Success || factor.vectorD().minCoeff() < minMassEigenvalue_)
-  { holdTarget("inertia matrix is not positive definite"); return false; }
-
-  double smallestMargin = std::numeric_limits<double>::infinity();
+  std::vector<mc_solver::SSMPFLConstraint::Measurement> measurements;
+  measurements.reserve(regions.size() * links.size());
   double closestDistance = std::numeric_limits<double>::infinity();
-  // Every region/link pair contributes a row; choosing only the nearest pair
-  // would miss another pair with a tighter approach-speed allowance.
+  size_t closestIndex = 0;
   for(size_t i = 0; i < regions.size() * links.size(); ++i)
   {
     const std::string region(regions[i / links.size()]);
     const std::string label = region + "/" + links[i % links.size()];
     const auto found = samples.find({region, links[i % links.size()]});
-    if(found == samples.end()) { holdTarget("missing pair " + label); return false; }
+    if(found == samples.end()) { pauseMotion("missing pair " + label); return false; }
     const auto & sample = *found->second;
     if(!std::isfinite(sample.distance) || sample.distance < 0
        || !sample.closest_points_valid || !sample.direction_valid || sample.robot_body.empty())
-    { holdTarget("invalid distance or witness at " + label); return false; }
+    { pauseMotion("invalid distance or witness at " + label); return false; }
     if(!sample.human_velocity_valid)
-    { holdTarget("human velocity unavailable at " + label); return false; }
-    Eigen::Vector3d n(-sample.direction[0], -sample.direction[1], -sample.direction[2]);
-    const double length = n.norm();
-    if(!n.allFinite() || !std::isfinite(length) || length < 1e-9)
-    { holdTarget("invalid normal at " + label); return false; }
-    n /= length;
+    { pauseMotion("human velocity unavailable at " + label); return false; }
+    Eigen::Vector3d normal(-sample.direction[0], -sample.direction[1], -sample.direction[2]);
+    const double length = normal.norm();
+    if(!normal.allFinite() || !std::isfinite(length) || length < 1e-9)
+    { pauseMotion("invalid normal at " + label); return false; }
+    normal /= length;
     const Eigen::Vector3d local(sample.robot_point_body_local[0], sample.robot_point_body_local[1],
                                 sample.robot_point_body_local[2]);
-    if(!local.allFinite()) { holdTarget("invalid local witness at " + label); return false; }
+    if(!local.allFinite()) { pauseMotion("invalid local witness at " + label); return false; }
     try { robot().bodyIndexByName(sample.robot_body); }
-    catch(const std::exception &) { holdTarget("unknown robot body at " + label); return false; }
+    catch(const std::exception &) { pauseMotion("unknown robot body at " + label); return false; }
     const auto & bodyPose = robot().bodyPosW(sample.robot_body);
-    // The MuJoCo witness and mc_rtc kinematic model must refer to the same
-    // physical point before its Jacobian can be used in a QP row.
     const Eigen::Vector3d modelWitness = bodyPose.rotation().transpose() * local + bodyPose.translation();
     const Eigen::Vector3d sampledWitness(sample.robot_point[0], sample.robot_point[1], sample.robot_point[2]);
     if(!sampledWitness.allFinite() || !std::isfinite((modelWitness - sampledWitness).norm())
        || (modelWitness - sampledWitness).norm() > maxModelWitnessError_)
-    { holdTarget("robot model/witness disagreement at " + label); return false; }
-    rbd::Jacobian jacobian(mb, sample.robot_body, local);
-    Eigen::MatrixXd full(6, dofs), fullDot(6, dofs);
-    jacobian.fullJacobian(mb, jacobian.jacobian(mb, mbc), full);
-    jacobian.fullJacobian(mb, jacobian.jacobianDot(mb, mbc), fullDot);
-    if(!full.allFinite() || !fullDot.allFinite())
-    { holdTarget("invalid point Jacobian at " + label); return false; }
-    // Project point velocity and acceleration onto the robot-to-human normal.
-    const Eigen::RowVectorXd directional = n.transpose() * full.bottomRows(3);
-    const auto & parameters = regionParameters_.at(region);
-    ssm_pfl::Limit limit;
-    try
-    {
-      limit = ssm_pfl::limit(factor, directional, parameters.force, parameters.stiffness,
-                             sample.distance, parameters.margin, stopTime_, minMobility_);
-    }
-    catch(const std::exception &) { holdTarget("invalid speed limit at " + label); return false; }
+    { pauseMotion("robot model/witness disagreement at " + label); return false; }
     const Eigen::Vector3d humanVelocity(sample.human_velocity[0], sample.human_velocity[1],
                                         sample.human_velocity[2]);
-    if(!humanVelocity.allFinite()) { holdTarget("invalid human velocity at " + label); return false; }
-    const double humanApproach = n.dot(humanVelocity);
-    const double robotApproach = directional.dot(qdot);
-    const double drift = (n.transpose() * fullDot.bottomRows(3) * qdot).value();
-    try
-    {
-      // v_next = J*qdot + dt*(J*qddot + Jdot*qdot). This row bounds
-      // its approach component by the SSM+PFL robot-speed budget.
-      const double budget = ssm_pfl::robotSpeedBudget(limit.combinedSpeed, humanApproach);
-      const double bound = ssm_pfl::pointSpeedUpperBound(budget, robotApproach, drift, solver().dt());
-      safetyConstraint_->set(static_cast<int>(i), solver().dt() * directional, bound);
-      // The plot follows clearance; the separate limiting label follows the
-      // smallest budget-minus-current-speed margin.
-      if(sample.distance < closestDistance)
-      {
-        closestDistance = sample.distance;
-        speedPlot_.pairIndex = i;
-        speedPlot_.pair = label;
-        speedPlot_.distance = sample.distance;
-        speedPlot_.current = robotApproach;
-        speedPlot_.limit = budget;
-        speedPlot_.drift = drift;
-        speedPlot_.directional = directional;
-#ifdef WITH_SMPLH_CONTACT_LOGGING
-        const auto regionIt = std::find(smplh_contact::regions.begin(), smplh_contact::regions.end(), region);
-        if(regionIt != smplh_contact::regions.end())
-        {
-          contactSelection_.valid = true;
-          contactSelection_.time = time_;
-          contactSelection_.region = static_cast<size_t>(std::distance(smplh_contact::regions.begin(), regionIt));
-          contactSelection_.robotBody = sample.robot_body;
-          for(int k = 0; k < 3; ++k)
-          {
-            contactSelection_.position[k] = sample.robot_point[k];
-            contactSelection_.normal[k] = n[k];
-          }
-        }
-#endif
-        speedPlot_.sampled = std::numeric_limits<double>::quiet_NaN();
-        if(sample.robot_velocity_valid)
-        {
-          const Eigen::Vector3d sampledVelocity(sample.robot_velocity[0], sample.robot_velocity[1],
-                                                sample.robot_velocity[2]);
-          if(sampledVelocity.allFinite()) speedPlot_.sampled = n.dot(sampledVelocity);
-        }
-      }
-      pairSpeedBudget_[i] = budget;
-      ++activePairs_;
-      const double margin = budget - robotApproach;
-      if(margin < smallestMargin) { smallestMargin = margin; limitingPair_ = label; limitingSpeed_ = budget; }
-    }
-    catch(const std::exception &) { holdTarget("invalid pointwise row at " + label); return false; }
+    if(!humanVelocity.allFinite()) { pauseMotion("invalid human velocity at " + label); return false; }
+    measurements.push_back({region, sample.robot_body, local, normal, humanVelocity, sample.distance});
+    if(sample.distance < closestDistance) { closestDistance = sample.distance; closestIndex = i; }
   }
-  safetyConstraint_->commit();
+  try { safetyConstraint_->setMeasurements(measurements); }
+  catch(const std::exception & e) { pauseMotion(std::string("invalid SSM+PFL row: ") + e.what()); return false; }
+  const auto & rowData = safetyConstraint_->rowData();
+  double smallestMargin = std::numeric_limits<double>::infinity();
+  for(size_t i = 0; i < rowData.size(); ++i)
+  {
+    const auto & row = rowData[i];
+    const std::string label = std::string(regions[i / links.size()]) + "/" + links[i % links.size()];
+    pairSpeedBudget_[i] = row.robotSpeedBudget;
+    const double margin = row.robotSpeedBudget - row.robotApproach;
+    if(margin < smallestMargin) { smallestMargin = margin; limitingPair_ = label; limitingSpeed_ = row.robotSpeedBudget; }
+  }
+  activePairs_ = static_cast<int>(rowData.size());
+  const auto & closest = *samples.at({regions[closestIndex / links.size()], links[closestIndex % links.size()]});
+  const auto & closestRow = rowData[closestIndex];
+  speedPlot_.pairIndex = closestIndex;
+  speedPlot_.pair = std::string(regions[closestIndex / links.size()]) + "/" + links[closestIndex % links.size()];
+  speedPlot_.distance = closest.distance;
+  speedPlot_.current = closestRow.robotApproach;
+  speedPlot_.limit = closestRow.robotSpeedBudget;
+  speedPlot_.drift = closestRow.jacobianDrift;
+  speedPlot_.directional = closestRow.directionalJacobian;
+  speedPlot_.sampled = std::numeric_limits<double>::quiet_NaN();
+  if(closest.robot_velocity_valid)
+  {
+    const Eigen::Vector3d sampledVelocity(closest.robot_velocity[0], closest.robot_velocity[1],
+                                          closest.robot_velocity[2]);
+    if(sampledVelocity.allFinite()) speedPlot_.sampled = measurements[closestIndex].normal.dot(sampledVelocity);
+  }
 #ifdef WITH_SMPLH_CONTACT_LOGGING
+  const std::string closestRegion(regions[closestIndex / links.size()]);
+  const auto regionIt = std::find(smplh_contact::regions.begin(), smplh_contact::regions.end(), closestRegion);
+  if(regionIt != smplh_contact::regions.end())
+  {
+    contactSelection_.valid = true;
+    contactSelection_.time = time_;
+    contactSelection_.region = static_cast<size_t>(std::distance(smplh_contact::regions.begin(), regionIt));
+    contactSelection_.robotBody = closest.robot_body;
+    for(int k = 0; k < 3; ++k)
+    {
+      contactSelection_.position[k] = closest.robot_point[k];
+      contactSelection_.normal[k] = measurements[closestIndex].normal[k];
+    }
+  }
   publishContactSelection();
 #endif
   fallback_ = false;
@@ -521,20 +448,21 @@ bool KinovaPositionSSMPFLController::run()
 #ifdef WITH_SMPLH_CONTACT_LOGGING
   updateContactForces();
 #endif
-  // Run the FSM lifecycle without solving, install this tick's distance rows,
-  // then solve with the current GUI position target.
+  // Keep running the FSM lifecycle and accepting GUI targets during a pause.
+  // The robot command changes only after a QP with current safety rows succeeds.
   mc_control::fsm::Controller::run(mc_solver::FeedbackType::SkipQP);
   time_ += solver().dt();
-  updateSafetyRows();
+  const bool measurementsValid = updateSafetyRows();
   updateContacts();
+  if(!measurementsValid) { solverSuccess_ = false; return true; }
   solverSuccess_ = solver().run(mc_solver::FeedbackType::None);
   if(!solverSuccess_)
   {
-    holdTarget("QP solve failed");
-    updateContacts();
-    // A failed QP does not integrate the robot. Retry once with a stationary
-    // target and the unavailable safety rows removed.
-    if(!solver().run(mc_solver::FeedbackType::None)) return false;
+    if(!fallback_ || fallbackReason_ != "QP solve failed") mc_rtc::log::warning("SSM+PFL QP solve failed; retrying next tick");
+    fallback_ = true;
+    fallbackReason_ = "QP solve failed";
+    speedPlot_.predicted = std::numeric_limits<double>::quiet_NaN();
+    return true;
   }
   maxSoftSlack_ = 0;
   if(!fallback_)

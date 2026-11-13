@@ -30,4 +30,6 @@ if(BUILD_TESTING)
   add_test(NAME kinova_position_ssm_pfl_smoke
     COMMAND kinova_position_ssm_pfl_smoke_test
       "${CMAKE_CURRENT_SOURCE_DIR}/examples/ssm_pfl_example.yaml")
+  set_tests_properties(kinova_position_ssm_pfl_smoke PROPERTIES
+    ENVIRONMENT "LD_LIBRARY_PATH=${CMAKE_CURRENT_BINARY_DIR}/src:$ENV{LD_LIBRARY_PATH}")
 endif()

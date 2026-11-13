@@ -1,5 +1,5 @@
 set(controller_SRC KinovaPositionSSMPFLController.cpp)
-set(controller_HDR KinovaPositionSSMPFLController.h SSMPFLConstraint.h SSMPFLMath.h api.h)
+set(controller_HDR KinovaPositionSSMPFLController.h api.h)
 
 add_library(${PROJECT_NAME} SHARED ${controller_SRC} ${controller_HDR})
 if(WITH_SMPLH_CONTACT_LOGGING)
